@@ -25,12 +25,15 @@ app.post('/webhook', async (req, res) => {
   const cloneUrl = payload.repository.clone_url;
   const branch = payload.ref.split('/').pop(); // e.g., refs/heads/main → main
 
-  const repoDir = path.join(__dirname, 'builds', `${repoName}_${branch}`);
+  const buildsDir = path.join(__dirname, 'builds');
+  const repoDir = path.join(buildsDir, `${repoName}_${branch}`);
 
-  // Ensure builds folder exists
-  if (!fs.existsSync(path.join(__dirname, 'builds'))) {
-    fs.mkdirSync(path.join(__dirname, 'builds'));
+  // Ensure builds folder exists (recursive creates any missing parent folders)
+  if (!fs.existsSync(buildsDir)) {
+    fs.mkdirSync(buildsDir, { recursive: true });
   }
+
+  console.log('Repo directory:', repoDir);
 
   try {
     if (!fs.existsSync(repoDir)) {
