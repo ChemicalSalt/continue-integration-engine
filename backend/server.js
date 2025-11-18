@@ -22,17 +22,17 @@ mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopol
 
 // -------------------- MIDDLEWARE --------------------
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  origin: process.env.FRONTEND_URL,
   credentials: true
-}));
+}));s
 app.use(bodyParser.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.use(session({
-  secret: process.env.SESSION_SECRET || 'fallback_secret',
+  secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
-  cookie: { httpOnly: true, secure: false, sameSite: 'lax' } // secure:true only if HTTPS
+  cookie: { httpOnly: true, secure: true, sameSite: 'lax' } // secure:true only if HTTPS
 }));
 
 // -------------------- ROUTES --------------------
