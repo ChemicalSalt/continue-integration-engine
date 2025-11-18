@@ -145,9 +145,10 @@ function execCommand(command, options = {}) {
 
 // -------------------- SERVE FRONTEND --------------------
 app.use(express.static(path.join(__dirname, 'frontend', 'dist')));
-app.get('/:path(.*)', (req, res) => {
+
+// Catch-all route for SPA (React/Vue/etc.)
+app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'frontend', 'dist', 'index.html'));
 });
-
 // -------------------- START SERVER --------------------
 app.listen(PORT, () => console.log(`Dynamic CI Engine running on port ${PORT}`));
