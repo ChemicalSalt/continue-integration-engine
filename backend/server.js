@@ -149,7 +149,7 @@ const frontendPath = path.join(__dirname, '..', 'frontend', 'dist');
 app.use(express.static(frontendPath));
 
 // MUST use '*' not /.*/ on Render
-app.get('*', (req, res) => {
+app.get('/.*/', (req, res) => {
   res.sendFile(path.join(frontendPath, 'index.html'));
 });
 
