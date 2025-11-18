@@ -24,7 +24,7 @@ mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopol
 app.use(cors({
   origin: process.env.FRONTEND_URL,
   credentials: true
-}));s
+}));
 app.use(bodyParser.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -32,17 +32,13 @@ app.use(session({
   secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
-  cookie: { httpOnly: true, secure: true, sameSite: 'lax' } // secure:true only if HTTPS
+  cookie: { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' }
 }));
 
 // -------------------- ROUTES --------------------
 app.use('/auth', authRoutes);
 
-// Root test
-app.get('/', (req, res) => res.send('Dynamic CI Engine running!'));
-
 // -------------------- REPO API --------------------
-// Fetch user's repos
 app.get('/api/repos', async (req, res) => {
   const userSession = req.session.user;
   if (!userSession) return res.status(401).send('Not authenticated');
@@ -56,7 +52,6 @@ app.get('/api/repos', async (req, res) => {
   }
 });
 
-// Add repo
 app.post('/api/repos', async (req, res) => {
   const userSession = req.session.user;
   if (!userSession) return res.status(401).send('Not authenticated');
@@ -78,7 +73,7 @@ app.post('/api/repos', async (req, res) => {
   }
 });
 
-// -------------------- BUILD --------------------
+// -------------------- BUILD FUNCTION --------------------
 async function triggerBuild(repo) {
   const repoDir = path.join(__dirname, 'builds', `${repo.userId}_${repo.repoName}_${repo.branch || 'main'}`);
   if (!fs.existsSync(path.join(__dirname, 'builds'))) fs.mkdirSync(path.join(__dirname, 'builds'));
@@ -147,6 +142,12 @@ function execCommand(command, options = {}) {
     });
   });
 }
+
+// -------------------- SERVE FRONTEND --------------------
+app.use(express.static(path.join(__dirname, 'frontend', 'dist')));
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'frontend', 'dist', 'index.html'));
+});
 
 // -------------------- START SERVER --------------------
 app.listen(PORT, () => console.log(`Dynamic CI Engine running on port ${PORT}`));
