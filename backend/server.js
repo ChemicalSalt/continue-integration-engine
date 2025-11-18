@@ -2,76 +2,151 @@ require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
-const { exec } = require('child_process');
-const fs = require('fs');
+const session = require('express-session');
+const mongoose = require('mongoose');
 const path = require('path');
+const fs = require('fs');
+const { exec } = require('child_process');
+
+const authRoutes = require('./routes/auth');
+const Repo = require('./models/repo');
+const Build = require('./models/build');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-app.use(cors());
-app.use(bodyParser.json());
+// -------------------- MONGO DB --------------------
+mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
+  .then(() => console.log('MongoDB connected'))
+  .catch(err => console.error('MongoDB connection error:', err));
 
-app.get('/', (req, res) => {
-  res.send('Continue Integration Engine is running!');
+// -------------------- MIDDLEWARE --------------------
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  credentials: true
+}));
+app.use(bodyParser.json());
+app.use(express.urlencoded({ extended: true }));
+
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'fallback_secret',
+  resave: false,
+  saveUninitialized: false,
+  cookie: { httpOnly: true, secure: false, sameSite: 'lax' } // secure:true only if HTTPS
+}));
+
+// -------------------- ROUTES --------------------
+app.use('/auth', authRoutes);
+
+// Root test
+app.get('/', (req, res) => res.send('Dynamic CI Engine running!'));
+
+// -------------------- REPO API --------------------
+// Fetch user's repos
+app.get('/api/repos', async (req, res) => {
+  const userSession = req.session.user;
+  if (!userSession) return res.status(401).send('Not authenticated');
+
+  try {
+    const repos = await Repo.find({ userId: userSession.id }).populate('builds');
+    res.json(repos);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send(err.toString());
+  }
 });
 
-// Webhook endpoint
-app.post('/webhook', async (req, res) => {
-  const payload = req.body;
-  console.log('Webhook received:', payload);
+// Add repo
+app.post('/api/repos', async (req, res) => {
+  const userSession = req.session.user;
+  if (!userSession) return res.status(401).send('Not authenticated');
 
-  const repoName = payload.repository.name;
-  const cloneUrl = payload.repository.clone_url;
-  const branch = payload.ref.split('/').pop(); // e.g., refs/heads/main → main
+  const { repoUrl, branch } = req.body;
+  if (!repoUrl) return res.status(400).send('repoUrl is required');
 
-  const buildsDir = path.join(__dirname, 'builds');
-  const repoDir = path.join(buildsDir, `${repoName}_${branch}`);
+  try {
+    const repoName = path.basename(repoUrl, '.git');
+    const repo = new Repo({ userId: userSession.id, repoUrl, repoName, branch: branch || 'main' });
+    await repo.save();
 
-  // Ensure builds folder exists (recursive creates any missing parent folders)
-  if (!fs.existsSync(buildsDir)) {
-    fs.mkdirSync(buildsDir, { recursive: true });
+    triggerBuild(repo).catch(err => console.error('triggerBuild error:', err));
+
+    res.status(200).json(repo);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send(err.toString());
   }
+});
 
-  console.log('Repo directory:', repoDir);
+// -------------------- BUILD --------------------
+async function triggerBuild(repo) {
+  const repoDir = path.join(__dirname, 'builds', `${repo.userId}_${repo.repoName}_${repo.branch || 'main'}`);
+  if (!fs.existsSync(path.join(__dirname, 'builds'))) fs.mkdirSync(path.join(__dirname, 'builds'));
 
   try {
     if (!fs.existsSync(repoDir)) {
-      console.log(`Cloning ${repoName}...`);
-      await execCommand(`git clone -b ${branch} ${cloneUrl} ${repoDir}`);
+      await execCommand(`git clone -b ${repo.branch || 'main'} ${repo.repoUrl} ${repoDir}`);
     } else {
-      console.log(`Pulling latest changes for ${repoName}...`);
       await execCommand(`git -C ${repoDir} reset --hard`);
-      await execCommand(`git -C ${repoDir} pull origin ${branch}`);
+      await execCommand(`git -C ${repoDir} pull origin ${repo.branch || 'main'}`);
     }
 
-    console.log('Installing dependencies...');
-    await execCommand(`npm install`, { cwd: repoDir });
+    const pkgJsonPath = path.join(repoDir, 'package.json');
+    let buildCmd = "echo 'No build step'";
 
-    console.log('Running build...');
-    const buildLogs = await execCommand(`npm run build`, { cwd: repoDir });
+    if (fs.existsSync(pkgJsonPath)) {
+      delete require.cache[require.resolve(pkgJsonPath)];
+      const pkg = require(pkgJsonPath);
+      if (pkg.scripts && pkg.scripts.build) buildCmd = 'npm install && npm run build';
+    }
 
-    console.log('Build finished. Logs:\n', buildLogs);
+    let buildLogs = '';
+    let status = 'success';
+    try { buildLogs = await execCommand(buildCmd, { cwd: repoDir }); } 
+    catch (err) { status = 'fail'; buildLogs = String(err); }
 
-    // TODO: Save buildLogs + metadata to DB
+    const commitSHA = (await execCommand('git rev-parse HEAD', { cwd: repoDir })).trim();
 
-    res.status(200).send('Webhook processed and build executed.');
+    const build = new Build({
+      userId: repo.userId,
+      repo: repo.repoName,
+      branch: repo.branch || 'main',
+      commitSHA,
+      status,
+      logs: buildLogs
+    });
+    await build.save();
+
+    repo.builds = repo.builds || [];
+    repo.builds.push(build._id);
+    await repo.save();
+
+    console.log(`Build for ${repo.repoName} saved successfully`);
   } catch (err) {
-    console.error('Error processing webhook:', err);
-    res.status(500).send('Error processing webhook.');
+    console.error('Build error:', err);
+    const build = new Build({
+      userId: repo.userId,
+      repo: repo.repoName,
+      branch: repo.branch || 'main',
+      commitSHA: null,
+      status: 'error',
+      logs: String(err)
+    });
+    await build.save();
+    repo.builds = repo.builds || [];
+    repo.builds.push(build._id);
+    await repo.save();
   }
-});
+}
 
-// Helper to wrap exec in a Promise
 function execCommand(command, options = {}) {
   return new Promise((resolve, reject) => {
     exec(command, { maxBuffer: 1024 * 500, ...options }, (error, stdout, stderr) => {
-      if (error) return reject(stderr || error.message);
-      resolve(stdout + stderr);
+      if (error) return reject(stderr || error.message || error);
+      resolve((stdout || '') + (stderr || ''));
     });
   });
 }
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+// -------------------- START SERVER --------------------
+app.listen(PORT, () => console.log(`Dynamic CI Engine running on port ${PORT}`));
