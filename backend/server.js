@@ -143,12 +143,15 @@ function execCommand(command, options = {}) {
   });
 }
 
-// -------------------- SERVE FRONTEND --------------------
-app.use(express.static(path.join(__dirname, 'frontend', 'dist')));
+// -------------------- SERVE FRONTEND -------------------- //
+const frontendPath = path.join(__dirname, '..', 'frontend', 'dist');
 
-// Catch-all route for SPA (React/Vue/etc.)
-app.get(/.*/, (req, res) => {
-  res.sendFile(path.join(__dirname, 'frontend', 'dist', 'index.html'));
+app.use(express.static(frontendPath));
+
+// MUST use '*' not /.*/ on Render
+app.get('*', (req, res) => {
+  res.sendFile(path.join(frontendPath, 'index.html'));
 });
+
 // -------------------- START SERVER --------------------
 app.listen(PORT, () => console.log(`Dynamic CI Engine running on port ${PORT}`));
